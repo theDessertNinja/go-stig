@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"strings"
 	"sync"
 )
 
@@ -13,10 +14,11 @@ import (
 //
 // Import all scripts (maybe just embed now?) and iterate through them and run the scripts with go routines
 //
-// Collect the stdout, stderr, and exit code from the scripts and apply them to the map or slice that contains all of
+// Collect the stdout, stderr, and exit code from the scripts and apply them to the map or slice that contains all
 // the results structs
 
-//go:embed testScripts
+//go:embed Modules/RHEL_7
+//go:embed Modules/RHEL_8
 var testScripts embed.FS
 
 type testResult struct {
@@ -31,8 +33,8 @@ type job struct {
 	vuln  string
 }
 
-func executeScript(scriptName string) testResult {
-	cmd := exec.Command("testScripts/" + scriptName)
+func executeScript(scriptDir string, scriptName string) testResult {
+	cmd := exec.Command(scriptDir + scriptName)
 
 	var vulnID string
 	vulnID = scriptName
@@ -58,7 +60,23 @@ func executeScript(scriptName string) testResult {
 
 }
 func main() {
-	testList, err := testScripts.ReadDir("testScripts")
+	var osReleaseBuf bytes.Buffer
+	exec.Command("bash", "-c", "source /etc/os-release && echo $VERSION_ID").Stdout = &osReleaseBuf
+
+	osRelease := osReleaseBuf.String()
+
+	var scriptDir string
+
+	if strings.Contains(osRelease, "7.") {
+		scriptDir = "Modules/RHEL_7"
+	} else if strings.Contains(osRelease, "8.") {
+		scriptDir = "Modules/RHEL_8"
+	} else {
+		fmt.Printf("This program only supports RHEL 7 and RHEL 8.\n")
+		//os.Exit(0)
+	}
+
+	testList, err := testScripts.ReadDir(scriptDir)
 	if err != nil {
 		panic(err)
 	}
@@ -68,13 +86,13 @@ func main() {
 	runtime.GOMAXPROCS(numCPUS)
 
 	var wg sync.WaitGroup
-	results := make([]testResult, len(testList))
+	testResults := make([]testResult, len(testList))
 	jobs := make(chan job, len(testList))
 
 	for w := 0; w < numCPUS; w++ {
 		go func() {
 			for job := range jobs {
-				results[job.index] = executeScript(job.vuln)
+				testResults[job.index] = executeScript(scriptDir, job.vuln)
 				wg.Done()
 			}
 		}()
@@ -88,5 +106,7 @@ func main() {
 	close(jobs)
 	wg.Wait()
 
-	// Put the function call here to make it put the data in the xml format that it needs to be in
+	for _, result := range testResults {
+		fmt.Printf("%+v\n", result)
+	} // Put the function call here to make it put the data in the xml format that it needs to be in
 }
