@@ -3,10 +3,11 @@ package main
 import (
 	"bytes"
 	"embed"
+	"flag"
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
-	"strings"
 	"sync"
 )
 
@@ -17,8 +18,9 @@ import (
 // Collect the stdout, stderr, and exit code from the scripts and apply them to the map or slice that contains all
 // the results structs
 
-//go:embed Modules/RHEL_7
-//go:embed Modules/RHEL_8
+//go:embed Modules/RHEL_7/*
+//go:embed Modules/RHEL_8/*
+//go:embed Modules/debug/*
 var testScripts embed.FS
 
 type testResult struct {
@@ -34,10 +36,10 @@ type job struct {
 }
 
 func executeScript(scriptDir string, scriptName string) testResult {
-	cmd := exec.Command(scriptDir + scriptName)
+	cmd := exec.Command(scriptDir + "/" + scriptName)
 
 	var vulnID string
-	vulnID = scriptName
+	vulnID = scriptName[:8]
 
 	var stdOutBuf, stdErrBuf bytes.Buffer
 	cmd.Stdout = &stdOutBuf
@@ -47,7 +49,7 @@ func executeScript(scriptDir string, scriptName string) testResult {
 
 	err := cmd.Run()
 	if err != nil {
-		fmt.Printf("Error executing testScripts/%s: %s\n", scriptName, err.Error())
+		fmt.Printf("Error executing %s: %s\n", scriptName, err.Error())
 		return testResult{vulnID, stdOutBuf.String(), stdErrBuf.String(), exitCode}
 	}
 
@@ -60,20 +62,18 @@ func executeScript(scriptDir string, scriptName string) testResult {
 
 }
 func main() {
-	var osReleaseBuf bytes.Buffer
-	exec.Command("bash", "-c", "source /etc/os-release && echo $VERSION_ID").Stdout = &osReleaseBuf
-
-	osRelease := osReleaseBuf.String()
+	debugFlag := flag.Bool("debug", false, "Enable debug mode and use specific debug scripts.")
+	flag.Parse()
 
 	var scriptDir string
 
-	if strings.Contains(osRelease, "7.") {
-		scriptDir = "Modules/RHEL_7"
-	} else if strings.Contains(osRelease, "8.") {
-		scriptDir = "Modules/RHEL_8"
-	} else {
-		fmt.Printf("This program only supports RHEL 7 and RHEL 8.\n")
-		//os.Exit(0)
+	if *debugFlag {
+		scriptDir = "Modules/debug"
+	}
+
+	if scriptDir == "" {
+		fmt.Println("Error: Script directory not specified, use -debug to troubleshoot.")
+		os.Exit(1)
 	}
 
 	testList, err := testScripts.ReadDir(scriptDir)
