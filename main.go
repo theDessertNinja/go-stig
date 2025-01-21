@@ -30,12 +30,8 @@ type testResult struct {
 	exitCode int
 }
 
-type job struct {
-	index int
-	vuln  string
-}
-
-func executeScript(scriptDir string, scriptName string) testResult {
+func executeScript(scriptDir string, scriptName string, ch chan testResult, wg *sync.WaitGroup) {
+	defer wg.Done()
 	cmd := exec.Command(scriptDir + "/" + scriptName)
 
 	var vulnID string
@@ -50,16 +46,14 @@ func executeScript(scriptDir string, scriptName string) testResult {
 	err := cmd.Run()
 	if err != nil {
 		fmt.Printf("Error executing %s: %s\n", scriptName, err.Error())
-		return testResult{vulnID, stdOutBuf.String(), stdErrBuf.String(), exitCode}
 	}
 
-	return testResult{
+	ch <- testResult{
 		vulnID:   vulnID,
 		stdOut:   stdOutBuf.String(),
 		stdErr:   stdErrBuf.String(),
 		exitCode: exitCode,
 	}
-
 }
 func main() {
 	debugFlag := flag.Bool("debug", false, "Enable debug mode and use specific debug scripts.")
@@ -81,32 +75,24 @@ func main() {
 		panic(err)
 	}
 
-	// Go routines here that call the execute function with the file name
 	numCPUS := runtime.NumCPU()
 	runtime.GOMAXPROCS(numCPUS)
 
 	var wg sync.WaitGroup
-	testResults := make([]testResult, len(testList))
-	jobs := make(chan job, len(testList))
 
-	for w := 0; w < numCPUS; w++ {
-		go func() {
-			for job := range jobs {
-				testResults[job.index] = executeScript(scriptDir, job.vuln)
-				wg.Done()
-			}
-		}()
+	resultChannel := make(chan testResult)
+
+	for _, test := range testList {
+		wg.Add(1)
+		go executeScript(scriptDir, test.Name(), resultChannel, &wg)
 	}
 
-	wg.Add(len(testList))
-	for i, test := range testList {
-		jobs <- job{i, test.Name()}
-	}
+	go func() {
+		wg.Wait()
+		close(resultChannel)
+	}()
 
-	close(jobs)
-	wg.Wait()
-
-	for _, result := range testResults {
+	for result := range resultChannel {
 		fmt.Printf("%+v\n", result)
 	} // Put the function call here to make it put the data in the xml format that it needs to be in
 }
